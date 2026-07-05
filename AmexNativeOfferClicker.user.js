@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amex Native Offer Clicker - Refresh Safe
 // @namespace    https://global.americanexpress.com/
-// @version      0.2.0
+// @version      0.3.0
 // @description  Adds Amex Offers by clicking the native Amex UI, with per-card refresh verification.
 // @match        https://global.americanexpress.com/*
 // @grant        none
@@ -26,6 +26,14 @@
   let abortRequested = false;
   let keepAliveTimer = null;
   let lastKeepAliveAt = 0;
+  let renderTimer = null;
+  let renderQueued = false;
+  let pageSummaryCache = {
+    card: "Unknown card",
+    counters: "",
+    plus: 0,
+    updatedAt: 0
+  };
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -47,7 +55,7 @@
 
   function setState(next) {
     saveJson(STORE_KEY, next);
-    render();
+    scheduleRender();
   }
 
   function getLogs() {
@@ -59,7 +67,7 @@
     const logs = getLogs();
     logs.push(`[${stamp}] ${message}`);
     saveJson(LOG_KEY, logs.slice(-250));
-    render();
+    scheduleRender();
   }
 
   function clearLogs(event) {
@@ -67,7 +75,7 @@
     event?.stopPropagation();
     saveJson(LOG_KEY, []);
     panel?.querySelector("[data-logs]")?.replaceChildren();
-    render();
+    scheduleRender(true);
   }
 
   function getKeepAliveConfig() {
@@ -77,7 +85,7 @@
   function setKeepAliveConfig(next) {
     saveJson(KEEP_ALIVE_KEY, next);
     scheduleKeepAlive();
-    render();
+    scheduleRender(true);
   }
 
   function textOf(node) {
@@ -85,23 +93,26 @@
   }
 
   function currentCardText() {
-    const body = document.body?.innerText || "";
-    const match = body.match(/(?:Business Platinum Card®|Amex EveryDay® Card|Hilton Honors Surpass® Card|Hilton Honors Aspire Card|Marriott Bonvoy Brilliant® American Express® Card|Blue Cash Everyday®)[\s\S]{0,3}••••\d+/);
-    return match ? match[0].replace(/\s+/g, " ") : "Unknown card";
+    const switcherText = textOf(document.querySelector(CARD_COMBO_SELECTOR));
+    if (switcherText) return switcherText;
+
+    const headerText = textOf(document.querySelector('[data-testid="simple_switcher_wrapper"]'));
+    const match = headerText.match(/(?:Business Platinum Card®|Amex EveryDay® Card|Hilton Honors Surpass® Card|Hilton Honors Aspire Card|Marriott Bonvoy Brilliant® American Express® Card|Blue Cash Everyday®).*?••••\d+/);
+    return match ? match[0].replace(/\s+/g, " ") : pageSummaryCache.card;
   }
 
   function getOfferName(button) {
     let root = button;
     for (let i = 0; i < 10 && root; i += 1) {
-      const text = root.innerText || "";
+      const text = root.textContent || "";
       if (text.includes("View Details") && text.length > 30) break;
       root = root.parentElement;
     }
-    const lines = (root?.innerText || "")
+    const lines = (root?.textContent || "")
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean);
-    return lines.slice(0, 3).join(" | ").slice(0, 180) || "offer";
+    return lines.slice(0, 3).join(" | ").replace(/\s+/g, " ").slice(0, 140) || "offer";
   }
 
   function addButtonCount() {
@@ -109,8 +120,39 @@
   }
 
   function countersText() {
-    const text = document.body?.innerText || "";
-    return (text.match(/Available \(\d+\)|Added to Card \(\d+\)/g) || []).join(", ");
+    const candidates = Array.from(document.querySelectorAll("button, h2, h3, [aria-label]"))
+      .map((node) => `${textOf(node)} ${node.getAttribute?.("aria-label") || ""}`);
+    return candidates
+      .flatMap((text) => text.match(/Available \(\d+\)|Added to Card \(\d+\)/g) || [])
+      .filter((value, index, arr) => arr.indexOf(value) === index)
+      .join(", ");
+  }
+
+  function refreshPageSummary(force = false) {
+    const now = Date.now();
+    if (!force && now - pageSummaryCache.updatedAt < 10000) return pageSummaryCache;
+
+    pageSummaryCache = {
+      card: currentCardText(),
+      counters: countersText(),
+      plus: addButtonCount(),
+      updatedAt: now
+    };
+    return pageSummaryCache;
+  }
+
+  function scheduleRender(force = false) {
+    if (!panel) return;
+    if (force) {
+      render(true);
+      return;
+    }
+    if (renderQueued) return;
+    renderQueued = true;
+    window.setTimeout(() => {
+      renderQueued = false;
+      render(false);
+    }, 250);
   }
 
   function findSessionButton() {
@@ -151,7 +193,7 @@
       pushLog("Sent keep-alive activity.");
     }
     lastKeepAliveAt = Date.now();
-    render();
+    scheduleRender(true);
   }
 
   function scheduleKeepAlive() {
@@ -170,7 +212,7 @@
   async function waitForPageReady(timeoutMs = 30000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      if (document.querySelector(ADD_BUTTON_SELECTOR) || /Recommended Offers|Added to Card|Available \(\d+\)/.test(document.body?.innerText || "")) {
+      if (document.querySelector(ADD_BUTTON_SELECTOR) || document.querySelector(CARD_COMBO_SELECTOR) || document.querySelector("[data-testid='simple_switcher_wrapper']")) {
         return true;
       }
       await sleep(500);
@@ -273,7 +315,8 @@
     }
 
     await waitForPageReady();
-    pushLog(`${state.phase || "process"}: ${currentCardText()} | plus=${addButtonCount()} | ${countersText()}`);
+    const summary = refreshPageSummary(true);
+    pushLog(`${state.phase || "process"}: ${summary.card} | plus=${summary.plus} | ${summary.counters}`);
 
     if (state.phase === "verify-after-refresh") {
       if (addButtonCount() > 0) {
@@ -283,7 +326,8 @@
         return;
       }
 
-      pushLog(`Done after refresh: ${currentCardText()} | ${countersText()}`);
+      const doneSummary = refreshPageSummary(true);
+      pushLog(`Done after refresh: ${doneSummary.card} | ${doneSummary.counters}`);
       const nextIndex = (state.index || 0) + 1;
       if (state.mode === "all" && nextIndex < cards.length) {
         const nextCard = cards[nextIndex];
@@ -520,12 +564,13 @@
     return el;
   }
 
-  function render() {
+  function render(forceSummary = false) {
     if (!panel) return;
     const state = getState();
     const keepAlive = getKeepAliveConfig();
     const logs = getLogs();
-    const card = state.currentCard?.label || currentCardText();
+    const summary = refreshPageSummary(forceSummary);
+    const card = state.currentCard?.label || summary.card;
     const keepAliveMinutes = Math.max(1, Math.round(Number(keepAlive.intervalMs || 240000) / 60000));
     const keepAliveAge = lastKeepAliveAt ? `${Math.round((Date.now() - lastKeepAliveAt) / 1000)}s ago` : "not yet";
     const keepAliveButton = panel.querySelector("[data-keepalive]");
@@ -536,19 +581,23 @@
       <div><b>Status:</b> ${state.active ? "running" : (state.phase || "idle")}</div>
       <div><b>Card:</b> ${card}</div>
       <div><b>Queue:</b> ${state.cards ? `${(state.index || 0) + 1}/${state.cards.length}` : "none"}</div>
-      <div><b>Page:</b> plus=${addButtonCount()} ${countersText()}</div>
+      <div><b>Page:</b> plus=${summary.plus} ${summary.counters}</div>
       <div><b>Keep alive:</b> ${keepAlive.enabled ? `${keepAliveMinutes} min, last ${keepAliveAge}` : "off"}</div>
     `;
-    panel.querySelector("[data-logs]").textContent = logs.join("\n");
-    panel.querySelector("[data-logs]").scrollTop = panel.querySelector("[data-logs]").scrollHeight;
+    const logBox = panel.querySelector("[data-logs]");
+    const nextLogText = logs.join("\n");
+    if (logBox.textContent !== nextLogText) {
+      logBox.textContent = nextLogText;
+      logBox.scrollTop = logBox.scrollHeight;
+    }
   }
 
   function boot() {
     if (document.getElementById("amex-native-offer-clicker")) return;
     panel = makePanel();
     scheduleKeepAlive();
-    render();
-    setInterval(render, 1500);
+    render(true);
+    renderTimer = setInterval(() => scheduleRender(false), 5000);
 
     const state = getState();
     if (state.active) {

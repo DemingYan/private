@@ -14,6 +14,7 @@ Important lessons from testing:
 - Skip checking accounts. Only process credit cards.
 - A slower delay is safer. `5000ms` is a good default; `7000ms` is better after rate-limit errors.
 - Amex can time out during long runs. Keep-alive is enabled by default and sends light page activity every few minutes.
+- The floating panel uses low-frequency cached status updates so it does not keep scanning the whole Amex page.
 
 ## Usage
 
