@@ -1,9 +1,11 @@
 // ==UserScript==
 // @name         Amex Native Offer Clicker - Refresh Safe
 // @namespace    https://global.americanexpress.com/
-// @version      0.3.0
+// @version      0.3.1
 // @description  Adds Amex Offers by clicking the native Amex UI, with per-card refresh verification.
 // @match        https://global.americanexpress.com/*
+// @updateURL    https://raw.githubusercontent.com/DemingYan/private/main/AmexNativeOfferClicker.user.js
+// @downloadURL  https://raw.githubusercontent.com/DemingYan/private/main/AmexNativeOfferClicker.user.js
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
