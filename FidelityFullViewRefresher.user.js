@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fidelity Full View Refresher
 // @namespace    https://digital.fidelity.com/
-// @version      0.2.5
+// @version      0.2.6
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
@@ -199,8 +199,53 @@
   }
 
   function getBackButton() {
-    return findActionByText(/^Back$/i, "[id='fvlBackButton']")
+    return getAllCandidates("button[id='fvlBackButton'], [id='fvlBackButton']")
+      .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
+      .find(Boolean)
+      || findActionByText(/^Back$/i, "[id='fvlBackButton']")
       || findActionByText(/^Back$/i);
+  }
+
+  function getCloseButton() {
+    return getAllCandidates("button[aria-label='Close'], [aria-label='Close']")
+      .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
+      .find(Boolean)
+      || findActionByText(/^Close$/i);
+  }
+
+  function describeNode(node) {
+    if (!node) return "none";
+    const tag = node.tagName?.toLowerCase() || "node";
+    const id = node.id ? `#${node.id}` : "";
+    const label = (node.getAttribute?.("aria-label") || textOf(node)).trim();
+    return `${tag}${id}${label ? ` (${label})` : ""}`;
+  }
+
+  function humanClick(node) {
+    if (!node) return false;
+    node.scrollIntoView({ block: "center", inline: "center" });
+    node.focus?.({ preventScroll: true });
+
+    const rect = node.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const base = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      screenX: window.screenX + x,
+      screenY: window.screenY + y
+    };
+
+    ["pointerover", "pointerenter", "mouseover", "mouseenter", "pointermove", "mousemove", "pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) => {
+      const EventClass = type.startsWith("pointer") && typeof PointerEvent !== "undefined" ? PointerEvent : MouseEvent;
+      node.dispatchEvent(new EventClass(type, { ...base, button: 0, buttons: type.endsWith("down") ? 1 : 0, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+    });
+    node.click?.();
+    return true;
   }
 
   function getDetailRoot(node) {
@@ -328,16 +373,17 @@
 
   function clickBack() {
     const button = getBackButton();
-    if (!button) return false;
-    button.click();
-    return true;
+    return humanClick(button) ? describeNode(button) : "";
   }
 
   function clickRefreshInformation() {
     const button = getRefreshInformationButton();
-    if (!button) return false;
-    button.click();
-    return true;
+    return humanClick(button) ? describeNode(button) : "";
+  }
+
+  function clickClose() {
+    const button = getCloseButton();
+    return humanClick(button) ? describeNode(button) : "";
   }
 
   async function waitForPage(predicate, timeoutMs = 20000) {
@@ -369,7 +415,7 @@
       if (state.phase !== "refreshing") {
         const ok = clickRefreshInformation();
         if (ok) {
-          pushLog(`Clicked Refresh information: ${name}`);
+          pushLog(`Clicked Refresh information: ${name} via ${ok}`);
           setState({ ...state, phase: "refreshing", currentName: name });
           await sleep(Number(state.delayMs || 8000));
         } else {
@@ -379,9 +425,17 @@
 
       const backOk = clickBack();
       if (backOk) {
-        pushLog(`Clicked Back after refresh: ${name}`);
+        pushLog(`Clicked Back after refresh: ${name} via ${backOk}`);
         setState({ ...getState(), phase: "returning-list", index: (state.index || 0) + 1 });
-        const returned = await waitForPage(isEditAccountsPage, 20000);
+        let returned = await waitForPage(isEditAccountsPage, 8000);
+        if (!returned && isEditInstitutionPage()) {
+          const closeOk = clickClose();
+          if (closeOk) {
+            pushLog(`Back did not return to list. Clicked Close fallback via ${closeOk}.`);
+            await sleep(1500);
+            returned = await ensureEditAccountsPage();
+          }
+        }
         if (!returned) {
           pushLog("Clicked Back, but the institution list is not visible yet. Stopping so you can inspect the page.");
           setState({ ...getState(), active: false, phase: "back-did-not-return-list" });
@@ -396,8 +450,17 @@
 
     if (!isEditAccountsPage() && getBackButton()) {
       pushLog("On an institution detail page. Clicking Back before continuing.");
-      clickBack();
-      const returned = await waitForPage(isEditAccountsPage, 20000);
+      const backOk = clickBack();
+      pushLog(`Clicked Back before continuing via ${backOk || "not found"}.`);
+      let returned = await waitForPage(isEditAccountsPage, 8000);
+      if (!returned && isEditInstitutionPage()) {
+        const closeOk = clickClose();
+        if (closeOk) {
+          pushLog(`Back did not return to list. Clicked Close fallback via ${closeOk}.`);
+          await sleep(1500);
+          returned = await ensureEditAccountsPage();
+        }
+      }
       if (!returned) {
         pushLog("Back did not return to the institution list. Stopping to avoid bad clicks.");
         setState({ ...getState(), active: false, phase: "back-did-not-return-list" });
