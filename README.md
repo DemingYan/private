@@ -71,13 +71,14 @@ The Chase script is intentionally conservative:
 ## Fidelity Full View Usage
 
 1. Install `FidelityFullViewRefresher.user.js` in Tampermonkey.
-2. Open Fidelity Full View `Edit accounts`.
-3. Click `Scan Institutions`.
-4. Click `Refresh All`.
+2. Open Fidelity Full View Net Worth or `Edit accounts`.
+3. Click `Refresh All`; it will open `Edit accounts` if needed.
+4. Optional: click `Scan Institutions` first to preview the detected institutions.
 
 The Fidelity script is intentionally UI-only:
 
 - It does not call Fidelity or aggregation APIs directly.
 - It scans visible linked institution cards.
+- It ignores individual account rows and only opens institution cards.
 - It opens each institution, clicks the native `Refresh information` control, waits, then clicks `Back`.
 - If Fidelity asks for credentials, MFA, or manual repair, the script stops so you can handle it.

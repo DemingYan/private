@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fidelity Full View Refresher
 // @namespace    https://digital.fidelity.com/
-// @version      0.1.0
+// @version      0.2.0
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
@@ -120,7 +120,8 @@
 
   function isEditAccountsPage() {
     const body = textOf(document.body).slice(0, 3000);
-    return /Edit accounts/i.test(body) && /Linked\s*\(\d+\s+institutions?\)/i.test(body);
+    return (/Edit accounts/i.test(body) && /Linked\s*\(\d+\s+institutions?\)/i.test(body))
+      || getInstitutionCards().length > 0;
   }
 
   function isEditInstitutionPage() {
@@ -157,6 +158,19 @@
     return node;
   }
 
+  function isInstitutionGrid(node) {
+    if (!isVisible(node) || !isEnabled(node)) return false;
+    if (node.closest?.("#fidelity-full-view-refresher")) return false;
+    if (node.classList?.contains("account")) return false;
+    if (!node.classList?.contains("grid")) return false;
+    if ((node.getAttribute("role") || "") !== "button") return false;
+    const id = node.id || "";
+    const text = textOf(node);
+    if (!id || id === "manage-accts-button") return false;
+    if (/Add more accounts|Add a non-Fidelity account|Edit\/Link Accounts|Edit non-Fidelity accounts/i.test(`${id} ${text}`)) return false;
+    return text.length > 1 && text.length < 180;
+  }
+
   function looksLikeInstitutionCard(node) {
     if (!isVisible(node)) return false;
     const text = textOf(node);
@@ -167,13 +181,20 @@
   }
 
   function getInstitutionCards() {
-    const raw = getAllCandidates("button, a, [role='button'], [tabindex='0'], div, section, article")
-      .filter(looksLikeInstitutionCard)
+    const gridCards = getAllCandidates("div.grid[role='button']").filter(isInstitutionGrid);
+    const source = gridCards.length > 0
+      ? gridCards
+      : getAllCandidates("button, a, [role='button'], [tabindex='0'], div, section, article").filter(looksLikeInstitutionCard);
+
+    const raw = source
       .map((node) => {
-        const clickable = closestClickable(node);
+        const clickable = isInstitutionGrid(node) ? node : closestClickable(node);
         const text = textOf(node);
+        const id = node.id || "";
         const lines = text.split(/\s{2,}|\n/).map((part) => part.trim()).filter(Boolean);
-        const name = (lines[0] || text)
+        const rawName = isInstitutionGrid(node) ? text || id : (lines[0] || text);
+        const name = rawName
+          .replace(/\s+-\s+via\s+.+$/i, "")
           .replace(/\$[\d,.-]+/g, "")
           .replace(/\b(Cash Equivalent|Checking|Savings|Credit Card|Brokerage|Loan|Mortgage)\b.*$/i, "")
           .replace(/\s+/g, " ")
@@ -182,6 +203,8 @@
         return { node, clickable, name, text };
       });
 
+    if (gridCards.length > 0) return raw;
+
     const seen = new Set();
     return raw.filter((item) => {
       const key = item.name || item.text.slice(0, 80);
@@ -189,6 +212,24 @@
       seen.add(key);
       return true;
     });
+  }
+
+  function findEditAccountsButton() {
+    return findByText(/^(Edit\/Link Accounts|Edit non-Fidelity accounts)$/i)
+      || findByText(/Edit\/Link Accounts|Edit non-Fidelity accounts/i);
+  }
+
+  async function ensureEditAccountsPage() {
+    if (isEditAccountsPage()) return true;
+
+    const button = findEditAccountsButton();
+    if (!button) return false;
+
+    button.scrollIntoView({ block: "center", inline: "nearest" });
+    await sleep(300);
+    button.click();
+    pushLog("Opened Edit accounts.");
+    return waitForPage(isEditAccountsPage, 20000);
   }
 
   function getQueue() {
@@ -201,6 +242,12 @@
   }
 
   function scanInstitutions() {
+    if (!isEditAccountsPage()) {
+      setQueue([]);
+      pushLog("Open Edit accounts first, then scan. Use Refresh All to open it automatically.");
+      return [];
+    }
+
     const queue = getInstitutionCards().map((item, index) => ({
       index,
       name: item.name || `Institution ${index + 1}`
@@ -284,9 +331,9 @@
       }
     }
 
-    const onList = await waitForPage(isEditAccountsPage, 20000);
+    const onList = await ensureEditAccountsPage();
     if (!onList) {
-      pushLog("Not on Edit accounts list yet. Waiting/stopping to avoid bad clicks.");
+      pushLog("Could not open Edit accounts. Click Edit/Link Accounts manually, then run again.");
       setState({ ...getState(), active: false, phase: "not-on-list" });
       return;
     }
@@ -337,6 +384,10 @@
   function startRun() {
     abortRequested = false;
     let queue = getQueue();
+    if (!isEditAccountsPage()) {
+      setQueue([]);
+      queue = [];
+    }
     if (queue.length === 0 && isEditAccountsPage()) queue = scanInstitutions();
 
     setState({
