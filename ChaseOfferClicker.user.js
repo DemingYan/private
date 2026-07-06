@@ -5,8 +5,8 @@
 // @description  Adds Chase Offers by clicking native Chase offer tiles slowly, with all-card queue support.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
-// @updateURL    https://raw.githubusercontent.com/DemingYan/private/main/ChaseOfferClicker.user.js
-// @downloadURL  https://raw.githubusercontent.com/DemingYan/private/main/ChaseOfferClicker.user.js
+// @updateURL    https://raw.githubusercontent.com/wtxcn/private/main/ChaseOfferClicker.user.js
+// @downloadURL  https://raw.githubusercontent.com/wtxcn/private/main/ChaseOfferClicker.user.js
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==

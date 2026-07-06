@@ -5,8 +5,8 @@
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
-// @updateURL    https://raw.githubusercontent.com/DemingYan/private/main/FidelityFullViewRefresher.user.js
-// @downloadURL  https://raw.githubusercontent.com/DemingYan/private/main/FidelityFullViewRefresher.user.js
+// @updateURL    https://raw.githubusercontent.com/wtxcn/private/main/FidelityFullViewRefresher.user.js
+// @downloadURL  https://raw.githubusercontent.com/wtxcn/private/main/FidelityFullViewRefresher.user.js
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
