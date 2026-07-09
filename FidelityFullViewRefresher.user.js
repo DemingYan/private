@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fidelity Full View Refresher
 // @namespace    https://digital.fidelity.com/
-// @version      0.3.3
+// @version      0.3.4
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
@@ -14,7 +14,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.3.3";
+  const VERSION = "0.3.4";
   const STORE_KEY = "fidelityFullViewRefresherState.v1";
   const LOG_KEY = "fidelityFullViewRefresherLogs.v1";
   const QUEUE_KEY = "fidelityFullViewRefresherQueue.v1";
@@ -163,12 +163,14 @@
       .find((node) => pattern.test(getClickableLabel(node)));
   }
 
-  function findActionByText(pattern, preferredSelector = "") {
+  function findActionByText(pattern, preferredSelector = "", options = {}) {
+    const includeDisabled = Boolean(options.includeDisabled);
+    const canUse = (node) => !isOwnPanel(node) && isVisible(node) && (includeDisabled || isEnabled(node));
     const matchesActionText = (node) => pattern.test(textOf(node)) || pattern.test(getClickableLabel(node));
 
     if (preferredSelector) {
       const preferred = getAllCandidates(preferredSelector)
-        .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
+        .filter(canUse)
         .find(matchesActionText);
       if (preferred) return closestClickable(preferred);
     }
@@ -184,12 +186,12 @@
     ].filter(Boolean).join(",");
 
     const semantic = getAllCandidates(selectors)
-      .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
+      .filter(canUse)
       .find(matchesActionText);
     if (semantic) return closestClickable(semantic);
 
     const textNode = getAllCandidates("button,a,[role='button'],[tabindex],pvd3-button,div,span,s-slot,s-assigned-wrapper")
-      .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
+      .filter(canUse)
       .find((node) => pattern.test(textOf(node)));
     return textNode ? closestClickable(textNode) : null;
   }
@@ -197,6 +199,11 @@
   function getRefreshInformationButton() {
     return findActionByText(/^Refresh information$/i, "[id='refresh-connection-btn']")
       || findActionByText(/Refresh information/i, "[id='refresh-connection-btn']");
+  }
+
+  function getRefreshInformationButtonAnyState() {
+    return findActionByText(/^Refresh information$/i, "[id='refresh-connection-btn']", { includeDisabled: true })
+      || findActionByText(/Refresh information/i, "[id='refresh-connection-btn']", { includeDisabled: true });
   }
 
   function getBackButton() {
@@ -433,6 +440,57 @@
     return humanClick(button) ? describeNode(button) : "";
   }
 
+  function isBusyRefreshButton(node) {
+    if (!node) return true;
+    let current = node;
+    for (let i = 0; i < 6 && current; i += 1) {
+      const style = window.getComputedStyle(current);
+      const className = String(current.className || "");
+      if (!isEnabled(current)
+        || current.matches?.(":disabled")
+        || current.getAttribute?.("aria-busy") === "true"
+        || current.getAttribute?.("data-loading") === "true"
+        || current.getAttribute?.("loading") === "true"
+        || /\b(disabled|loading|busy|spinner)\b/i.test(className)
+        || style.pointerEvents === "none"
+        || Number(style.opacity || 1) < 0.65) {
+        return true;
+      }
+      current = current.parentElement || current.getRootNode?.().host;
+    }
+    return false;
+  }
+
+  async function waitForRefreshToFinish(name, maxWaitMs) {
+    const timeoutMs = Math.max(Number(maxWaitMs || 30000), 8000);
+    const start = Date.now();
+    let sawBusy = false;
+    let loggedBusy = false;
+
+    await sleep(700);
+    while (Date.now() - start < timeoutMs) {
+      if (!isEditInstitutionPage()) return true;
+
+      const button = getRefreshInformationButtonAnyState();
+      const busy = isBusyRefreshButton(button);
+      if (busy) {
+        sawBusy = true;
+        if (!loggedBusy) {
+          loggedBusy = true;
+          pushLog(`Refresh information is gray/busy. Waiting: ${name}.`);
+        }
+      } else if (sawBusy || Date.now() - start >= 1500) {
+        pushLog(`Refresh information is available again: ${name}.`);
+        return true;
+      }
+
+      await sleep(700);
+    }
+
+    pushLog(`Refresh wait timed out after ${Math.round(timeoutMs / 1000)}s: ${name}. Continuing.`);
+    return false;
+  }
+
   function clickClose() {
     const button = getCloseButton();
     return humanClick(button) ? describeNode(button) : "";
@@ -500,7 +558,7 @@
         if (ok) {
           pushLog(`Clicked Refresh information: ${name} via ${ok}`);
           setState({ ...state, phase: "refreshing", currentName: name });
-          await sleep(Number(state.delayMs || 8000));
+          await waitForRefreshToFinish(name, state.delayMs || 30000);
         } else {
           pushLog(`Could not find Refresh information on ${name}.`);
         }
@@ -589,7 +647,7 @@
       active: true,
       phase: "starting",
       index: 0,
-      delayMs: Number(panel.querySelector("[data-delay]").value || 8000),
+      delayMs: Number(panel.querySelector("[data-delay]").value || 30000),
       maxItems: Number(panel.querySelector("[data-max]").value || 100),
       startedAt: Date.now()
     });
@@ -709,7 +767,7 @@
       </header>
       <main>
         <div>
-          <label>Delay <input data-delay type="number" min="3000" step="1000" value="8000"> ms</label>
+          <label>Max wait <input data-delay type="number" min="8000" step="1000" value="30000"> ms</label>
           <label>Max <input data-max type="number" min="1" step="1" value="100"></label>
         </div>
         <div>
